@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 320px; font-family: -apple-system, system-ui, sans-serif; background: #fff; color: #333; }
+    .header { background: linear-gradient(135deg, #4CAF50, #2E7D32); color: white; padding: 16px; text-align: center; }
+    .header h1 { font-size: 16px; }
+    .header p { font-size: 12px; opacity: .8; margin-top: 4px; }
+    .section { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; }
+    .section-title { font-size: 11px; color: #888; margin-bottom: 8px; font-weight: 600; text-transform: uppercase; }
+    .api-list { list-style: none; }
+    .api-list li { padding: 6px 0; font-size: 13px; border-bottom: 1px solid #f5f5f5; }
+    .api-list li:last-child { border-bottom: none; }
+    .api-name { font-family: monospace; color: #4CAF50; font-weight: 500; }
+    .api-desc { color: #666; font-size: 12px; margin-top: 2px; }
+    .btn { width: 100%; padding: 10px; background: #4CAF50; color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; font-weight: 500; }
+    .btn:hover { background: #43A047; }
+    .output { background: #f5f5f5; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 11px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    .ver { text-align: center; padding: 8px; font-size: 11px; color: #ccc; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🌳 树洞数据解析器</h1>
+    <p>Treehole Parser v1.0</p>
+  </div>
+  
+  <div class="section">
+    <div class="section-title">📡 可用 API</div>
+    <ul class="api-list">
+      <li>
+        <div class="api-name">TreeholeAPI.getPosts()</div>
+        <div class="api-desc">获取当前页面所有帖子</div>
+      </li>
+      <li>
+        <div class="api-name">TreeholeAPI.getPostDetail()</div>
+        <div class="api-desc">获取当前打开的帖子详情</div>
+      </li>
+      <li>
+        <div class="api-name">TreeholeAPI.getComments()</div>
+        <div class="api-desc">获取当前帖子的评论列表</div>
+      </li>
+      <li>
+        <div class="api-name">TreeholeAPI.search(keyword)</div>
+        <div class="api-desc">搜索帖子</div>
+      </li>
+      <li>
+        <div class="api-name">TreeholeAPI.getRawData()</div>
+        <div class="api-desc">获取所有原始数据</div>
+      </li>
+    </ul>
+  </div>
+  
+  <div class="section">
+    <button class="btn" id="testBtn">测试获取数据</button>
+    <div class="output" id="output" style="display:none; margin-top:10px;"></div>
+  </div>
+  
+  <div class="ver">Made with ❤️ for PKU</div>
+
+  <script>
+    document.getElementById('testBtn').addEventListener('click', async () => {
+      const output = document.getElementById('output');
+      output.style.display = 'block';
+      output.textContent = '获取中...';
+      
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const result = await chrome.tabs.sendMessage(tab.id, { type: 'TEST' });
+        output.textContent = JSON.stringify(result, null, 2);
+      } catch(e) {
+        output.textContent = '错误: ' + e.message;
+      }
+    });
+  </script>
+</body>
+</html>
