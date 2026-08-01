@@ -1,25 +1,26 @@
 /**
- * 树洞数据解析器 v4.0 - 完整 API 覆盖
+ * 树洞数据解析器 v5.0 - 修复数据结构映射
  * 
- * 抓取到的原版请求：
- *   GET  /hole/list_comments  - 帖子列表+评论
- *   GET  /hole/one?pid=XXX    - 单个帖子
- *   GET  /tags/tree           - 标签树
- *   GET  /navigation-items/list - 导航项
- *   GET  /user_config/get     - 用户配置
- *   GET  /bookmark/list       - 收藏列表
- *   GET  /message/un_read     - 未读消息
- *   GET  /exclusive_id/list   - 匿名ID列表
- *   GET  /person_blocking_words/index - 屏蔽词
- *   GET  /reminder/list       - 提醒列表
- *   POST /users/info          - 用户信息
+ * 实际 API 返回格式：
+ *   getPost(pid) → { hole: {...}, list: [...comments] }
+ *   getPosts()   → { data: [{hole, list}, ...], total: N }
+ *   
+ * 字段映射：
+ *   hole.text       → content
+ *   hole.timestamp  → Unix seconds (需 ×1000 转 ms)
+ *   hole.reply      → comment_num
+ *   hole.likenum    → like_num
+ *   hole.tags_info  → tags
+ *   comment.cid     → id
+ *   comment.text    → content
+ *   comment.name_tag → user label (洞主/Alice...)
+ *   comment.comment_id → reply_to
  */
 (function() {
   'use strict';
 
   const BASE = '/chapi/api/v3';
   
-  // ===== 获取认证 headers =====
   function getAuthHeaders() {
     const token = localStorage.getItem('token') || '';
     const xsrf = document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] || '';
@@ -38,65 +39,59 @@
     };
   }
 
-  // ===== 通用请求 =====
   async function request(endpoint, params = {}, method = 'GET') {
     const url = new URL(endpoint, window.location.origin);
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null) url.searchParams.set(k, v);
     });
-    const options = {
-      method,
-      credentials: 'include',
-      headers: getAuthHeaders()
-    };
+    const options = { method, credentials: 'include', headers: getAuthHeaders() };
     if (method === 'POST') options.body = JSON.stringify({});
     const resp = await fetch(url.toString(), options);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-    if (data.success === false) throw new Error(data.message);
+    if (data.success === false) throw new Error(data.message || `code ${data.code}`);
     return data.data;
   }
 
-  // ===== 帖子相关 =====
+  // ===== getPosts =====
   async function getPosts(page = 1, limit = 10) {
     const data = await request(`${BASE}/hole/list_comments`, {
-      page, limit, comment_limit: 10, is_follow: 1, comment_stream: 1
+      page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
     });
-    return {
-      posts: (data.data || []).map(parsePost),
-      total: data.total || 0,
-      page: data.page || page,
-      hasMore: (data.data || []).length === limit
-    };
+    // data = { data: [{hole, list}, ...], total, page, limit }
+    const items = data.data || [];
+    const posts = items.map(wrapPost);
+    return { posts, total: data.total || 0, page: data.page || page, hasMore: posts.length === limit };
   }
 
+  // ===== getPost =====
   async function getPost(pid) {
     const data = await request(`${BASE}/hole/one`, { pid, comment_stream: 1 });
-    return parsePost(data);
+    // data = { hole: {...}, list: [...] }
+    return wrapPost(data);
   }
 
+  // ===== getComments =====
   async function getComments(pid, page = 1, limit = 50) {
     const data = await request(`${BASE}/hole/list_comments`, {
       pid, page, limit, comment_limit: 0, comment_stream: 1
     });
-    return {
-      comments: (data.data || []).map(parseComment),
-      total: data.total || 0,
-      hasMore: (data.data || []).length === limit
-    };
+    const items = data.data || [];
+    // 每个 item = {hole, list}，取 list 里的评论
+    const comments = [];
+    items.forEach(item => {
+      (item.list || []).forEach(c => comments.push(wrapComment(c, item.hole)));
+    });
+    return { comments, total: data.total || 0, hasMore: comments.length === limit };
   }
 
-  // ===== 搜索 =====
+  // ===== search =====
   async function search(keyword, page = 1, limit = 20) {
     const data = await request(`${BASE}/hole/list_comments`, {
       keyword, page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
     });
-    return {
-      posts: (data.data || []).map(parsePost),
-      total: data.total || 0,
-      keyword,
-      hasMore: (data.data || []).length === limit
-    };
+    const items = data.data || [];
+    return { posts: items.map(wrapPost), total: data.total || 0, keyword, hasMore: items.length === limit };
   }
 
   // ===== 元数据 =====
@@ -110,41 +105,68 @@
   async function getReminders(page = 1, limit = 1000) { return await request(`${BASE}/reminder/list`, { page, limit }); }
   async function getUserInfo() { return await request(`${BASE}/users/info`, {}, 'POST'); }
 
-  // ===== 解析 =====
-  function parsePost(r) {
-    if (!r) return null;
+  // ===== wrapPost: {hole, list} → 标准 Post =====
+  function wrapPost(item) {
+    if (!item || !item.hole) return null;
+    const h = item.hole;
     return {
-      pid: r.pid, title: r.title || '', content: r.content || '',
-      timestamp: r.timestamp, time: fmtTime(r.timestamp),
-      like_num: r.like_num||0, tread_num: r.tread_num||0,
-      comment_num: r.comment_num||0, share_num: r.share_num||0,
-      images: (r.images||[]).map(img => ({
-        id: img.id,
-        url: `/chapi/api/v3/media/getImageBinary?id=${img.id}`,
-        thumbnail: `/chapi/api/v3/media/getThumbnail?id=${img.id}`
+      pid: h.pid,
+      content: h.text || '',
+      timestamp: h.timestamp ? new Date(h.timestamp * 1000).toISOString() : null,
+      time: fmtTime(h.timestamp),
+      type: h.type,
+      like_num: h.likenum || 0,
+      tread_num: h.tread_num || 0,
+      comment_num: h.reply || 0,
+      share_num: h.extra || 0,
+      tags: (h.tags_info || []).map(t => t.name || t),
+      images: parseMediaIds(h.media_ids),
+      anonymous: h.anonymous === 1,
+      is_follow: h.is_follow === 1,
+      is_top: h.is_top === 1,
+      fold: h.fold || 0,
+      preview_comments: (item.list || []).map(c => wrapComment(c, h)),
+      _raw: item
+    };
+  }
+
+  // ===== wrapComment =====
+  function wrapComment(c, hole) {
+    if (!c) return null;
+    return {
+      id: c.cid,
+      pid: c.pid,
+      content: c.text || '',
+      timestamp: c.timestamp ? new Date(c.timestamp * 1000).toISOString() : null,
+      time: fmtTime(c.timestamp),
+      name_tag: c.name_tag || null,
+      is_lz: c.is_lz === 1,
+      reply_to: c.comment_id || null,
+      anonymous: c.anonymous === 1,
+      images: parseMediaIds(c.media_ids),
+      quote: (c.quote || []).map(q => ({
+        id: q.cid,
+        content: q.text,
+        name_tag: q.name_tag
       })),
-      tags: r.tags||[],
-      user: r.user ? { uid: r.user.uid, nickname: r.user.nickname||'匿名', avatar: r.user.avatar } : null,
-      preview_comments: (r.comments||[]).map(parseComment),
-      _raw: r
+      _raw: c
     };
   }
 
-  function parseComment(r) {
-    if (!r) return null;
-    return {
-      id: r.id, pid: r.pid, content: r.content||'',
-      timestamp: r.timestamp, time: fmtTime(r.timestamp),
-      like_num: r.like_num||0, reply_to: r.reply_to||null,
-      user: r.user ? { uid: r.user.uid, nickname: r.user.nickname||'匿名', avatar: r.user.avatar } : null,
-      quote: r.quote ? { id: r.quote.id, content: r.quote.content, user: r.quote.user?.nickname||'匿名' } : null,
-      _raw: r
-    };
+  // ===== parseMediaIds =====
+  function parseMediaIds(ids) {
+    if (!ids || ids === '') return [];
+    return ids.split(',').filter(Boolean).map(id => ({
+      id: parseInt(id),
+      url: `/chapi/api/v3/media/getImageBinary?id=${id}`,
+      thumbnail: `/chapi/api/v3/media/getThumbnail?id=${id}`
+    }));
   }
 
+  // ===== fmtTime =====
   function fmtTime(ts) {
     if (!ts) return '';
-    const d = new Date(ts), now = new Date(), diff = now - d;
+    const d = new Date(ts * 1000), now = new Date(), diff = now - d;
     if (diff < 60000) return '刚刚';
     if (diff < 3600000) return `${Math.floor(diff/60000)}分钟前`;
     if (diff < 86400000) return `${Math.floor(diff/3600000)}小时前`;
@@ -152,15 +174,11 @@
     return `${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
   }
 
-  // ===== 暴露 API =====
   window.TreeholeAPI = {
-    // 帖子
     getPosts, getPost, getComments, search,
-    // 元数据
     getTags, getNavigation, getUserConfig, getBookmarks,
     getUnreadMessages, getExclusiveIds, getBlockingWords, getReminders, getUserInfo,
-    version: '4.0.0'
+    version: '5.0.0'
   };
-
-  console.log('[Treehole Parser v4.0] Loaded - Full API coverage');
+  console.log('[Treehole Parser v5.0] Loaded - Fixed data mapping');
 })();
