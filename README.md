@@ -1,6 +1,6 @@
-# 🌳 树洞数据解析器 - Treehole Parser
+# 🌳 树洞数据解析器 v2.0
 
-解析北大树洞页面数据，暴露结构化 JSON API 供前端使用。
+直接调用北大树洞后端 API，返回结构化 JSON 数据。
 
 ## 📦 安装
 
@@ -11,27 +11,41 @@
 
 ## 🚀 使用
 
-1. 访问 https://treehole.pku.edu.cn/ch/web/pc/index
+1. 登录树洞（确保浏览器有登录态）
 2. 打开 F12 Console
 3. 调用 API：
 
 ```javascript
 // 获取帖子列表
-TreeholeAPI.getPosts()
+const posts = await TreeholeAPI.getPosts(1, 20);
 
-// 获取帖子详情（先点击一个帖子）
-TreeholeAPI.getPostDetail()
+// 获取帖子详情
+const post = await TreeholeAPI.getPost(8430775);
 
 // 获取评论
-TreeholeAPI.getComments()
+const comments = await TreeholeAPI.getComments(8430775);
 
 // 搜索
-await TreeholeAPI.search("关键词")
+const results = await TreeholeAPI.search("考试");
 ```
 
 ## 📖 API 文档
 
 详见 [API.md](API.md)
+
+## 🏗️ 架构
+
+```
+浏览器 (Cookie 认证)
+    ↓
+parser.js (Chrome Extension)
+    ↓
+树洞后端 API (/chapi/api/v3/*)
+    ↓
+结构化 JSON 数据
+    ↓
+前端渲染 (Gemini 负责)
+```
 
 ## 📁 文件结构
 

@@ -1,230 +1,217 @@
 /**
- * 树洞数据解析器 - Treehole Parser v1.0
+ * 树洞数据解析器 v2.0 - 直接调用后端 API
  * 
- * 功能：解析北大树洞页面数据，暴露结构化 JSON API
- * 使用：在树洞页面的 Console 中调用 TreeholeAPI.xxx()
+ * 功能：通过树洞 RESTful API 获取结构化数据
+ * 依赖：浏览器的登录态 Cookie（无需前端 DOM）
  * 
  * API 列表：
- *   TreeholeAPI.getPosts()           - 获取当前页面所有帖子
- *   TreeholeAPI.getPostDetail()      - 获取当前打开的帖子详情
- *   TreeholeAPI.getComments()        - 获取当前帖子的评论
- *   TreeholeAPI.search(keyword)      - 搜索帖子
- *   TreeholeAPI.refresh()            - 刷新页面数据
- *   TreeholeAPI.getRawData()         - 获取原始 DOM 数据
+ *   TreeholeAPI.getPosts(page, limit)     - 获取帖子列表
+ *   TreeholeAPI.getPost(pid)              - 获取单个帖子详情
+ *   TreeholeAPI.getComments(pid, page)    - 获取帖子评论
+ *   TreeholeAPI.search(keyword, page)     - 搜索帖子
+ *   TreeholeAPI.getTags()                 - 获取标签树
+ *   TreeholeAPI.getUserInfo()             - 获取当前用户信息
  */
 (function() {
   'use strict';
 
-  // ===== 解析单个帖子 =====
-  function parsePost(row) {
-    if (!row) return null;
+  const BASE = '/chapi/api/v3';
+  
+  // ===== 通用请求函数 =====
+  async function request(endpoint, params = {}) {
+    const url = new URL(endpoint, window.location.origin);
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) url.searchParams.set(k, v);
+    });
     
-    const postBox = row.querySelector('.box-post');
-    const header = row.querySelector('.box-header');
-    const content = row.querySelector('.box-content');
-    const top = row.querySelector('.box-top.msy-post');
-    
-    if (!postBox || !content) return null;
-
-    // PID
-    const headerText = header?.textContent || '';
-    const pidMatch = headerText.match(/#(\d+)/);
-    const pid = pidMatch ? parseInt(pidMatch[1]) : null;
-
-    // 时间
-    const timeMatch = headerText.match(/(\d{1,2}-\d{1,2}\s+\d{2}:\d{2})/);
-    const time = timeMatch ? timeMatch[1] : null;
-
-    // 统计数据 - 格式: "1 20 42" (分享 点赞 评论) 在帖子开头
-    const statsText = row.textContent || '';
-    // 树洞的统计格式是 "分享数 点赞数 评论数" 在帖子最前面
-    const statsMatch = statsText.match(/^(\d+)\s+(\d+)\s+(\d+)\s+#/);
-    let shares = 0, likes = 0, comments = 0;
-    if (statsMatch) {
-      shares = parseInt(statsMatch[1]) || 0;
-      likes = parseInt(statsMatch[2]) || 0;
-      comments = parseInt(statsMatch[3]) || 0;
-    }
-
-    // 图片
-    const hasImage = !!top?.style?.backgroundImage;
-    const imageUrl = hasImage ? top.style.backgroundImage.replace(/url\(["']?/, '').replace(/["']?\)/, '') : null;
-
-    // 标签
-    const tags = [];
-    content.querySelectorAll('a').forEach(a => {
-      if (a.href?.includes('keyword=')) {
-        tags.push(a.textContent.trim());
+    const resp = await fetch(url.toString(), {
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json'
       }
     });
+    
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    }
+    
+    const data = await resp.json();
+    
+    // 树洞 API 统一返回格式: { success, message, data }
+    if (data.success === false) {
+      throw new Error(data.message || 'API request failed');
+    }
+    
+    return data.data;
+  }
 
+  // ===== 获取帖子列表 =====
+  async function getPosts(page = 1, limit = 20) {
+    const data = await request(`${BASE}/hole/list_comments`, {
+      page,
+      limit,
+      comment_limit: 3,  // 每个帖子预览3条评论
+      is_follow: 1,
+      comment_stream: 1
+    });
+    
+    // 解析帖子列表
+    const posts = (data.data || []).map(parsePostFromAPI);
+    
     return {
+      posts,
+      total: data.total || 0,
+      page: data.page || page,
+      limit: data.limit || limit,
+      hasMore: posts.length === limit
+    };
+  }
+
+  // ===== 获取单个帖子 =====
+  async function getPost(pid) {
+    const data = await request(`${BASE}/hole/get`, { pid });
+    return parsePostFromAPI(data);
+  }
+
+  // ===== 获取评论 =====
+  async function getComments(pid, page = 1, limit = 50) {
+    const data = await request(`${BASE}/hole/list_comments`, {
       pid,
-      time,
-      content: content.textContent.trim(),
+      page,
+      limit,
+      comment_limit: 0,
+      comment_stream: 1
+    });
+    
+    const comments = (data.data || []).map(parseCommentFromAPI);
+    
+    return {
       comments,
-      likes,
-      shares,
-      hasImage,
-      imageUrl,
-      tags,
-      element: row  // 保留 DOM 引用，供后续操作
+      total: data.total || 0,
+      page: data.page || page,
+      hasMore: comments.length === limit
     };
-  }
-
-  // ===== 解析评论 =====
-  function parseComment(box, index) {
-    if (!box) return null;
-    
-    const content = box.querySelector('.box-content-reply');
-    const header = box.querySelector('.box-header');
-    const quote = box.querySelector('.rItemQuoteTop');
-    
-    if (!content) return null;
-
-    const headerText = header?.textContent || '';
-    const pidMatch = headerText.match(/#(\d+)/);
-    const timeMatch = headerText.match(/(\d{1,2}-\d{1,2}\s+\d{2}:\d{2})/);
-    const userMatch = headerText.match(/\[(?:洞主|Alice|Bob|Carol|Dave|Eve|Francis|Grace|Hans|Iris|Jack|Kevin|Leo|Mike|Nick|Oscar|Piper|Quinn|Ray|Sam|Tina|Uma|Val|Wendy|Xander|Yuki|Zoe)\]/);
-
-    return {
-      index,
-      pid: pidMatch ? parseInt(pidMatch[1]) : null,
-      time: timeMatch ? timeMatch[1] : null,
-      user: userMatch ? userMatch[0] : null,
-      content: content.textContent.trim(),
-      hasQuote: !!quote,
-      quoteContent: quote?.textContent?.trim() || null,
-      element: box
-    };
-  }
-
-  // ===== 获取所有帖子 =====
-  function getPosts() {
-    const posts = [];
-    document.querySelectorAll('.flow-item-row').forEach(row => {
-      const post = parsePost(row);
-      if (post) posts.push(post);
-    });
-    return posts;
-  }
-
-  // ===== 获取帖子详情 =====
-  function getPostDetail() {
-    // 尝试从侧边栏获取
-    const sidebar = document.querySelector('.sidebar-content');
-    if (!sidebar) return null;
-
-    const postBox = sidebar.querySelector('.box-post');
-    const content = sidebar.querySelector('.box-content-detail');
-    const header = sidebar.querySelector('.box-header');
-    const top = sidebar.querySelector('.box-top.msy-post');
-
-    if (!postBox) return null;
-
-    const headerText = header?.textContent || '';
-    const pidMatch = headerText.match(/#(\d+)/);
-    const timeMatch = headerText.match(/(\d{1,2}-\d{1,2}\s+\d{2}:\d{2})/);
-
-    const statsText = sidebar.textContent || '';
-    const commentMatch = statsText.match(/(\d+)\s*💬/);
-    const likeMatch = statsText.match(/(\d+)\s*⭐/);
-
-    const hasImage = !!top?.style?.backgroundImage;
-    const imageUrl = hasImage ? top.style.backgroundImage.replace(/url\(["']?/, '').replace(/["']?\)/, '') : null;
-
-    return {
-      pid: pidMatch ? parseInt(pidMatch[1]) : null,
-      time: timeMatch ? timeMatch[1] : null,
-      content: content?.textContent?.trim() || '',
-      comments: commentMatch ? parseInt(commentMatch[1]) : 0,
-      likes: likeMatch ? parseInt(likeMatch[1]) : 0,
-      hasImage,
-      imageUrl
-    };
-  }
-
-  // ===== 获取评论列表 =====
-  function getComments() {
-    const sidebar = document.querySelector('.sidebar-content');
-    if (!sidebar) return [];
-
-    const comments = [];
-    sidebar.querySelectorAll('.commnet_box_inner').forEach((box, i) => {
-      const comment = parseComment(box, i);
-      if (comment) comments.push(comment);
-    });
-    return comments;
   }
 
   // ===== 搜索帖子 =====
-  async function search(keyword) {
-    // 通过 URL 参数搜索
-    const searchUrl = `https://treehole.pku.edu.cn/ch/web/pc/index?keyword=${encodeURIComponent(keyword)}`;
-    
-    // 创建隐藏 iframe 加载搜索结果
-    return new Promise((resolve) => {
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = searchUrl;
-      document.body.appendChild(iframe);
-      
-      iframe.onload = () => {
-        try {
-          const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-          const posts = [];
-          iframeDoc.querySelectorAll('.flow-item-row').forEach(row => {
-            const post = parsePost(row);
-            if (post) posts.push(post);
-          });
-          document.body.removeChild(iframe);
-          resolve(posts);
-        } catch(e) {
-          document.body.removeChild(iframe);
-          resolve([]);
-        }
-      };
-      
-      setTimeout(() => {
-        try { document.body.removeChild(iframe); } catch(e) {}
-        resolve([]);
-      }, 5000);
+  async function search(keyword, page = 1, limit = 20) {
+    const data = await request(`${BASE}/hole/list_comments`, {
+      keyword,
+      page,
+      limit,
+      comment_limit: 3,
+      is_follow: 1,
+      comment_stream: 1
     });
-  }
-
-  // ===== 刷新数据 =====
-  function refresh() {
+    
+    const posts = (data.data || []).map(parsePostFromAPI);
+    
     return {
-      posts: getPosts(),
-      detail: getPostDetail(),
-      comments: getComments(),
-      timestamp: new Date().toISOString()
+      posts,
+      total: data.total || 0,
+      page: data.page || page,
+      keyword,
+      hasMore: posts.length === limit
     };
   }
 
-  // ===== 获取原始数据 =====
-  function getRawData() {
+  // ===== 获取标签 =====
+  async function getTags() {
+    const data = await request(`${BASE}/tags/tree`);
+    return data;
+  }
+
+  // ===== 获取用户信息 =====
+  async function getUserInfo() {
+    const data = await request(`${BASE}/users/info`, {}, 'POST');
+    return data;
+  }
+
+  // ===== 解析帖子数据（从 API 响应） =====
+  function parsePostFromAPI(raw) {
+    if (!raw) return null;
+    
     return {
-      posts: getPosts().map(p => ({...p, element: undefined})),
-      detail: getPostDetail(),
-      comments: getComments().map(c => ({...c, element: undefined})),
-      url: location.href,
-      title: document.title,
-      timestamp: new Date().toISOString()
+      pid: raw.pid,
+      title: raw.title || '',
+      content: raw.content || '',
+      timestamp: raw.timestamp,
+      time: formatTime(raw.timestamp),
+      like_num: raw.like_num || 0,
+      tread_num: raw.tread_num || 0,
+      comment_num: raw.comment_num || 0,
+      share_num: raw.share_num || 0,
+      images: (raw.images || []).map(img => ({
+        id: img.id,
+        url: `/chapi/api/v3/media/getImageBinary?id=${img.id}`,
+        thumbnail: `/chapi/api/v3/media/getThumbnail?id=${img.id}`
+      })),
+      tags: raw.tags || [],
+      user: raw.user ? {
+        uid: raw.user.uid,
+        nickname: raw.user.nickname || '匿名',
+        avatar: raw.user.avatar || null
+      } : null,
+      // 预览评论（如果有）
+      preview_comments: (raw.comments || []).map(parseCommentFromAPI),
+      // 原始数据（调试用）
+      _raw: raw
     };
+  }
+
+  // ===== 解析评论数据（从 API 响应） =====
+  function parseCommentFromAPI(raw) {
+    if (!raw) return null;
+    
+    return {
+      id: raw.id,
+      pid: raw.pid,
+      content: raw.content || '',
+      timestamp: raw.timestamp,
+      time: formatTime(raw.timestamp),
+      like_num: raw.like_num || 0,
+      reply_to: raw.reply_to || null,
+      user: raw.user ? {
+        uid: raw.user.uid,
+        nickname: raw.user.nickname || '匿名',
+        avatar: raw.user.avatar || null
+      } : null,
+      // 引用的评论
+      quote: raw.quote ? {
+        id: raw.quote.id,
+        content: raw.quote.content,
+        user: raw.quote.user?.nickname || '匿名'
+      } : null,
+      _raw: raw
+    };
+  }
+
+  // ===== 时间格式化 =====
+  function formatTime(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+    
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return `${Math.floor(diff/60000)}分钟前`;
+    if (diff < 86400000) return `${Math.floor(diff/3600000)}小时前`;
+    if (diff < 604800000) return `${Math.floor(diff/86400000)}天前`;
+    
+    return `${date.getMonth()+1}-${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2,'0')}`;
   }
 
   // ===== 暴露全局 API =====
   window.TreeholeAPI = {
     getPosts,
-    getPostDetail,
+    getPost,
     getComments,
     search,
-    refresh,
-    getRawData,
-    version: '1.0.0'
+    getTags,
+    getUserInfo,
+    version: '2.0.0'
   };
 
-  console.log('[Treehole Parser] v1.0.0 loaded');
-  console.log('[Treehole Parser] API: TreeholeAPI.getPosts() / getPostDetail() / getComments() / search(keyword) / refresh() / getRawData()');
+  console.log('[Treehole Parser v2.0] Loaded');
+  console.log('[Treehole Parser v2.0] API: TreeholeAPI.getPosts() / getPost(pid) / getComments(pid) / search(keyword)');
 })();
