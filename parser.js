@@ -1,29 +1,33 @@
 /**
- * 树洞数据解析器 v3.0 - 完整 headers 认证
+ * 树洞数据解析器 v4.0 - 完整 API 覆盖
  * 
- * 关键 headers（从原版树洞抓取）：
- *   Authorization: Bearer <token>    ← localStorage('token')
- *   X-XSRF-TOKEN: <xsrf>            ← cookie('XSRF-TOKEN')
- *   uuid: Web_PKUHOLE_2.0.0_WEB_UUID_xxx  ← 设备唯一ID
- *   userAgent: pku_web               ← 自定义标识
+ * 抓取到的原版请求：
+ *   GET  /hole/list_comments  - 帖子列表+评论
+ *   GET  /hole/one?pid=XXX    - 单个帖子
+ *   GET  /tags/tree           - 标签树
+ *   GET  /navigation-items/list - 导航项
+ *   GET  /user_config/get     - 用户配置
+ *   GET  /bookmark/list       - 收藏列表
+ *   GET  /message/un_read     - 未读消息
+ *   GET  /exclusive_id/list   - 匿名ID列表
+ *   GET  /person_blocking_words/index - 屏蔽词
+ *   GET  /reminder/list       - 提醒列表
+ *   POST /users/info          - 用户信息
  */
 (function() {
   'use strict';
 
   const BASE = '/chapi/api/v3';
   
-  // ===== 获取认证信息 =====
+  // ===== 获取认证 headers =====
   function getAuthHeaders() {
     const token = localStorage.getItem('token') || '';
     const xsrf = document.cookie.match(/XSRF-TOKEN=([^;]+)/)?.[1] || '';
-    
-    // uuid 格式：Web_PKUHOLE_2.0.0_WEB_UUID_xxxxxxxx
     let uuid = localStorage.getItem('pku-uuid');
     if (!uuid) {
       uuid = 'Web_PKUHOLE_2.0.0_WEB_UUID_' + crypto.randomUUID();
       localStorage.setItem('pku-uuid', uuid);
     }
-    
     return {
       'Authorization': `Bearer ${token}`,
       'X-XSRF-TOKEN': xsrf,
@@ -34,194 +38,129 @@
     };
   }
 
-  // ===== 通用请求函数 =====
+  // ===== 通用请求 =====
   async function request(endpoint, params = {}, method = 'GET') {
     const url = new URL(endpoint, window.location.origin);
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null) url.searchParams.set(k, v);
     });
-    
-    const headers = getAuthHeaders();
-    
     const options = {
       method,
       credentials: 'include',
-      headers
+      headers: getAuthHeaders()
     };
-    
-    if (method === 'POST') {
-      options.body = JSON.stringify({});
-    }
-    
+    if (method === 'POST') options.body = JSON.stringify({});
     const resp = await fetch(url.toString(), options);
-    
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-    }
-    
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-    
-    if (data.success === false) {
-      throw new Error(data.message || 'API request failed');
-    }
-    
+    if (data.success === false) throw new Error(data.message);
     return data.data;
   }
 
-  // ===== 获取帖子列表 =====
-  async function getPosts(page = 1, limit = 20) {
+  // ===== 帖子相关 =====
+  async function getPosts(page = 1, limit = 10) {
     const data = await request(`${BASE}/hole/list_comments`, {
-      page,
-      limit,
-      comment_limit: 3,
-      is_follow: 1,
-      comment_stream: 1
+      page, limit, comment_limit: 10, is_follow: 1, comment_stream: 1
     });
-    
-    const posts = (data.data || []).map(parsePost);
     return {
-      posts,
+      posts: (data.data || []).map(parsePost),
       total: data.total || 0,
       page: data.page || page,
-      limit: data.limit || limit,
-      hasMore: posts.length === limit
+      hasMore: (data.data || []).length === limit
     };
   }
 
-  // ===== 获取单个帖子 =====
   async function getPost(pid) {
-    const data = await request(`${BASE}/hole/get`, { pid });
+    const data = await request(`${BASE}/hole/one`, { pid, comment_stream: 1 });
     return parsePost(data);
   }
 
-  // ===== 获取评论 =====
   async function getComments(pid, page = 1, limit = 50) {
     const data = await request(`${BASE}/hole/list_comments`, {
-      pid,
-      page,
-      limit,
-      comment_limit: 0,
-      comment_stream: 1
+      pid, page, limit, comment_limit: 0, comment_stream: 1
     });
-    
-    const comments = (data.data || []).map(parseComment);
     return {
-      comments,
+      comments: (data.data || []).map(parseComment),
       total: data.total || 0,
-      page: data.page || page,
-      hasMore: comments.length === limit
+      hasMore: (data.data || []).length === limit
     };
   }
 
-  // ===== 搜索帖子 =====
+  // ===== 搜索 =====
   async function search(keyword, page = 1, limit = 20) {
     const data = await request(`${BASE}/hole/list_comments`, {
-      keyword,
-      page,
-      limit,
-      comment_limit: 3,
-      is_follow: 1,
-      comment_stream: 1
+      keyword, page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
     });
-    
-    const posts = (data.data || []).map(parsePost);
     return {
-      posts,
+      posts: (data.data || []).map(parsePost),
       total: data.total || 0,
-      page: data.page || page,
       keyword,
-      hasMore: posts.length === limit
+      hasMore: (data.data || []).length === limit
     };
   }
 
-  // ===== 获取标签 =====
-  async function getTags() {
-    return await request(`${BASE}/tags/tree`);
-  }
+  // ===== 元数据 =====
+  async function getTags() { return await request(`${BASE}/tags/tree`); }
+  async function getNavigation() { return await request(`${BASE}/navigation-items/list`, { page: 1, limit: 1000 }); }
+  async function getUserConfig(type = 2) { return await request(`${BASE}/user_config/get`, { type }); }
+  async function getBookmarks(page = 1, limit = 60) { return await request(`${BASE}/bookmark/list`, { page, limit }); }
+  async function getUnreadMessages(type = 'int_msg') { return await request(`${BASE}/message/un_read`, { message_type: type }); }
+  async function getExclusiveIds() { return await request(`${BASE}/exclusive_id/list`); }
+  async function getBlockingWords() { return await request(`${BASE}/person_blocking_words/index`); }
+  async function getReminders(page = 1, limit = 1000) { return await request(`${BASE}/reminder/list`, { page, limit }); }
+  async function getUserInfo() { return await request(`${BASE}/users/info`, {}, 'POST'); }
 
-  // ===== 获取用户信息 =====
-  async function getUserInfo() {
-    return await request(`${BASE}/users/info`, {}, 'POST');
-  }
-
-  // ===== 解析帖子 =====
-  function parsePost(raw) {
-    if (!raw) return null;
+  // ===== 解析 =====
+  function parsePost(r) {
+    if (!r) return null;
     return {
-      pid: raw.pid,
-      title: raw.title || '',
-      content: raw.content || '',
-      timestamp: raw.timestamp,
-      time: formatTime(raw.timestamp),
-      like_num: raw.like_num || 0,
-      tread_num: raw.tread_num || 0,
-      comment_num: raw.comment_num || 0,
-      share_num: raw.share_num || 0,
-      images: (raw.images || []).map(img => ({
+      pid: r.pid, title: r.title || '', content: r.content || '',
+      timestamp: r.timestamp, time: fmtTime(r.timestamp),
+      like_num: r.like_num||0, tread_num: r.tread_num||0,
+      comment_num: r.comment_num||0, share_num: r.share_num||0,
+      images: (r.images||[]).map(img => ({
         id: img.id,
         url: `/chapi/api/v3/media/getImageBinary?id=${img.id}`,
         thumbnail: `/chapi/api/v3/media/getThumbnail?id=${img.id}`
       })),
-      tags: raw.tags || [],
-      user: raw.user ? {
-        uid: raw.user.uid,
-        nickname: raw.user.nickname || '匿名',
-        avatar: raw.user.avatar || null
-      } : null,
-      preview_comments: (raw.comments || []).map(parseComment),
-      _raw: raw
+      tags: r.tags||[],
+      user: r.user ? { uid: r.user.uid, nickname: r.user.nickname||'匿名', avatar: r.user.avatar } : null,
+      preview_comments: (r.comments||[]).map(parseComment),
+      _raw: r
     };
   }
 
-  // ===== 解析评论 =====
-  function parseComment(raw) {
-    if (!raw) return null;
+  function parseComment(r) {
+    if (!r) return null;
     return {
-      id: raw.id,
-      pid: raw.pid,
-      content: raw.content || '',
-      timestamp: raw.timestamp,
-      time: formatTime(raw.timestamp),
-      like_num: raw.like_num || 0,
-      reply_to: raw.reply_to || null,
-      user: raw.user ? {
-        uid: raw.user.uid,
-        nickname: raw.user.nickname || '匿名',
-        avatar: raw.user.avatar || null
-      } : null,
-      quote: raw.quote ? {
-        id: raw.quote.id,
-        content: raw.quote.content,
-        user: raw.quote.user?.nickname || '匿名'
-      } : null,
-      _raw: raw
+      id: r.id, pid: r.pid, content: r.content||'',
+      timestamp: r.timestamp, time: fmtTime(r.timestamp),
+      like_num: r.like_num||0, reply_to: r.reply_to||null,
+      user: r.user ? { uid: r.user.uid, nickname: r.user.nickname||'匿名', avatar: r.user.avatar } : null,
+      quote: r.quote ? { id: r.quote.id, content: r.quote.content, user: r.quote.user?.nickname||'匿名' } : null,
+      _raw: r
     };
   }
 
-  // ===== 时间格式化 =====
-  function formatTime(timestamp) {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
+  function fmtTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts), now = new Date(), diff = now - d;
     if (diff < 60000) return '刚刚';
     if (diff < 3600000) return `${Math.floor(diff/60000)}分钟前`;
     if (diff < 86400000) return `${Math.floor(diff/3600000)}小时前`;
     if (diff < 604800000) return `${Math.floor(diff/86400000)}天前`;
-    return `${date.getMonth()+1}-${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2,'0')}`;
+    return `${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
   }
 
-  // ===== 暴露全局 API =====
+  // ===== 暴露 API =====
   window.TreeholeAPI = {
-    getPosts,
-    getPost,
-    getComments,
-    search,
-    getTags,
-    getUserInfo,
-    version: '3.0.0'
+    // 帖子
+    getPosts, getPost, getComments, search,
+    // 元数据
+    getTags, getNavigation, getUserConfig, getBookmarks,
+    getUnreadMessages, getExclusiveIds, getBlockingWords, getReminders, getUserInfo,
+    version: '4.0.0'
   };
 
-  console.log('[Treehole Parser v3.0] Loaded');
-  console.log('[Treehole Parser v3.0] Headers: Authorization + XSRF + uuid + userAgent');
+  console.log('[Treehole Parser v4.0] Loaded - Full API coverage');
 })();
