@@ -80,7 +80,9 @@
     // 每个 item = {hole, list}，取 list 里的评论
     const comments = [];
     items.forEach(item => {
-      (item.list || []).forEach(c => comments.push(wrapComment(c, item.hole)));
+      if (Array.isArray(item.list)) {
+        item.list.forEach(c => comments.push(wrapComment(c, item.hole)));
+      }
     });
     return { comments, total: data.total || 0, hasMore: comments.length === limit };
   }
@@ -119,13 +121,13 @@
       tread_num: h.tread_num || 0,
       comment_num: h.reply || 0,
       share_num: h.extra || 0,
-      tags: (h.tags_info || []).map(t => t.name || t),
+      tags: Array.isArray(h.tags_info) ? h.tags_info.map(t => t.name || t) : [],
       images: parseMediaIds(h.media_ids),
       anonymous: h.anonymous === 1,
       is_follow: h.is_follow === 1,
       is_top: h.is_top === 1,
       fold: h.fold || 0,
-      preview_comments: (item.list || []).map(c => wrapComment(c, h)),
+      preview_comments: Array.isArray(item.list) ? item.list.map(c => wrapComment(c, h)) : [],
       _raw: item
     };
   }
@@ -144,11 +146,11 @@
       reply_to: c.comment_id || null,
       anonymous: c.anonymous === 1,
       images: parseMediaIds(c.media_ids),
-      quote: (c.quote || []).map(q => ({
+      quote: Array.isArray(c.quote) ? c.quote.map(q => ({
         id: q.cid,
         content: q.text,
         name_tag: q.name_tag
-      })),
+      })) : [],
       _raw: c
     };
   }
@@ -156,7 +158,8 @@
   // ===== parseMediaIds =====
   function parseMediaIds(ids) {
     if (!ids || ids === '') return [];
-    return ids.split(',').filter(Boolean).map(id => ({
+    const idList = typeof ids === 'string' ? ids.split(',') : Array.isArray(ids) ? ids : [];
+    return idList.filter(Boolean).map(id => ({
       id: parseInt(id),
       url: `/chapi/api/v3/media/getImageBinary?id=${id}`,
       thumbnail: `/chapi/api/v3/media/getThumbnail?id=${id}`
