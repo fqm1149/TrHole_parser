@@ -58,10 +58,10 @@
     const data = await request(`${BASE}/hole/list_comments`, {
       page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
     });
-    // data = { data: [{hole, list}, ...], total, page, limit }
-    const items = data.data || [];
+    // data = { list: [{hole, list}, ...], total }
+    const items = data.list || [];
     const posts = items.map(wrapPost);
-    return { posts, total: data.total || 0, page: data.page || page, hasMore: posts.length === limit };
+    return { posts, total: data.total || 0, page, hasMore: posts.length === limit };
   }
 
   // ===== getPost =====
@@ -76,8 +76,8 @@
     const data = await request(`${BASE}/hole/list_comments`, {
       pid, page, limit, comment_limit: 0, comment_stream: 1
     });
-    const items = data.data || [];
-    // 每个 item = {hole, list}，取 list 里的评论
+    // data = { list: [{hole, list}, ...], total }
+    const items = data.list || [];
     const comments = [];
     items.forEach(item => {
       if (Array.isArray(item.list)) {
@@ -92,7 +92,7 @@
     const data = await request(`${BASE}/hole/list_comments`, {
       keyword, page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
     });
-    const items = data.data || [];
+    const items = data.list || [];
     return { posts: items.map(wrapPost), total: data.total || 0, keyword, hasMore: items.length === limit };
   }
 
