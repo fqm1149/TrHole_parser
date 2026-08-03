@@ -1,20 +1,12 @@
 /**
- * 树洞数据解析器 v5.0 - 修复数据结构映射
+ * 树洞数据解析器 v6.0 - 正确处理两种 API 格式
  * 
- * 实际 API 返回格式：
- *   getPost(pid) → { hole: {...}, list: [...comments] }
- *   getPosts()   → { data: [{hole, list}, ...], total: N }
- *   
- * 字段映射：
- *   hole.text       → content
- *   hole.timestamp  → Unix seconds (需 ×1000 转 ms)
- *   hole.reply      → comment_num
- *   hole.likenum    → like_num
- *   hole.tags_info  → tags
- *   comment.cid     → id
- *   comment.text    → content
- *   comment.name_tag → user label (洞主/Alice...)
- *   comment.comment_id → reply_to
+ * API 格式：
+ *   list_comments → { list: [hole, hole, ...], total }
+ *     每个 hole 是扁平对象 { pid, text, comment_total, comment_list:[] ... }
+ *     
+ *   hole/one → { hole: {...}, list: [comment, comment, ...] }
+ *     hole 是帖子详情，list 是评论列表
  */
 (function() {
   'use strict';
@@ -34,66 +26,61 @@
       'X-XSRF-TOKEN': xsrf,
       'uuid': uuid,
       'userAgent': 'pku_web',
-      'Accept': 'application/json, text/plain, */*',
-      'Content-Type': 'application/json'
+      'Accept': 'application/json, text/plain, */*'
     };
   }
 
-  async function request(endpoint, params = {}, method = 'GET') {
+  async function request(endpoint, params = {}) {
     const url = new URL(endpoint, window.location.origin);
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null) url.searchParams.set(k, v);
     });
-    const options = { method, credentials: 'include', headers: getAuthHeaders() };
-    if (method === 'POST') options.body = JSON.stringify({});
-    const resp = await fetch(url.toString(), options);
+    const resp = await fetch(url.toString(), {
+      credentials: 'include',
+      headers: getAuthHeaders()
+    });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     if (data.success === false) throw new Error(data.message || `code ${data.code}`);
     return data.data;
   }
 
-  // ===== getPosts =====
+  // ===== getPosts: list_comments 返回扁平 hole =====
   async function getPosts(page = 1, limit = 10) {
     const data = await request(`${BASE}/hole/list_comments`, {
-      page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
+      page, limit, comment_limit: 0, comment_stream: 1
     });
-    // data = { list: [{hole, list}, ...], total }
     const items = data.list || [];
-    const posts = items.map(wrapPost);
+    const posts = items.map(h => wrapHole(h));
     return { posts, total: data.total || 0, page, hasMore: posts.length === limit };
   }
 
-  // ===== getPost =====
+  // ===== getPost: hole/one 返回 {hole, list} =====
   async function getPost(pid) {
     const data = await request(`${BASE}/hole/one`, { pid, comment_stream: 1 });
-    // data = { hole: {...}, list: [...] }
-    return wrapPost(data);
+    const post = wrapHole(data.hole);
+    post.preview_comments = (data.list || []).map(c => wrapComment(c));
+    return post;
   }
 
-  // ===== getComments =====
+  // ===== getComments: 用 hole/one 获取评论 =====
   async function getComments(pid, page = 1, limit = 50) {
-    const data = await request(`${BASE}/hole/list_comments`, {
-      pid, page, limit, comment_limit: 0, comment_stream: 1
-    });
-    // data = { list: [{hole, list}, ...], total }
-    const items = data.list || [];
-    const comments = [];
-    items.forEach(item => {
-      if (Array.isArray(item.list)) {
-        item.list.forEach(c => comments.push(wrapComment(c, item.hole)));
-      }
-    });
-    return { comments, total: data.total || 0, hasMore: comments.length === limit };
+    // hole/one 的 list 字段包含评论
+    const data = await request(`${BASE}/hole/one`, { pid, comment_stream: 1 });
+    const allComments = (data.list || []).map(c => wrapComment(c));
+    // 简单分页（API 一次返回所有评论）
+    const start = (page - 1) * limit;
+    const comments = allComments.slice(start, start + limit);
+    return { comments, total: allComments.length, hasMore: start + limit < allComments.length };
   }
 
   // ===== search =====
   async function search(keyword, page = 1, limit = 20) {
     const data = await request(`${BASE}/hole/list_comments`, {
-      keyword, page, limit, comment_limit: 3, is_follow: 1, comment_stream: 1
+      keyword, page, limit, comment_limit: 0, comment_stream: 1
     });
     const items = data.list || [];
-    return { posts: items.map(wrapPost), total: data.total || 0, keyword, hasMore: items.length === limit };
+    return { posts: items.map(h => wrapHole(h)), total: data.total || 0, keyword, hasMore: items.length === limit };
   }
 
   // ===== 元数据 =====
@@ -105,12 +92,11 @@
   async function getExclusiveIds() { return await request(`${BASE}/exclusive_id/list`); }
   async function getBlockingWords() { return await request(`${BASE}/person_blocking_words/index`); }
   async function getReminders(page = 1, limit = 1000) { return await request(`${BASE}/reminder/list`, { page, limit }); }
-  async function getUserInfo() { return await request(`${BASE}/users/info`, {}, 'POST'); }
+  async function getUserInfo() { return await request(`${BASE}/users/info`); }
 
-  // ===== wrapPost: {hole, list} → 标准 Post =====
-  function wrapPost(item) {
-    if (!item || !item.hole) return null;
-    const h = item.hole;
+  // ===== wrapHole: 扁平 hole 对象 → 标准 Post =====
+  function wrapHole(h) {
+    if (!h) return null;
     return {
       pid: h.pid,
       content: h.text || '',
@@ -119,21 +105,23 @@
       type: h.type,
       like_num: h.likenum || 0,
       tread_num: h.tread_num || 0,
-      comment_num: h.reply || 0,
+      comment_num: h.reply || h.comment_total || 0,
       share_num: h.extra || 0,
-      tags: Array.isArray(h.tags_info) ? h.tags_info.map(t => t.name || t) : [],
+      tags: parseTags(h.tags_info, h.tags_ids),
       images: parseMediaIds(h.media_ids),
       anonymous: h.anonymous === 1,
       is_follow: h.is_follow === 1,
       is_top: h.is_top === 1,
       fold: h.fold || 0,
-      preview_comments: Array.isArray(item.list) ? item.list.map(c => wrapComment(c, h)) : [],
-      _raw: item
+      preview_comments: Array.isArray(h.comment_list)
+        ? h.comment_list.map(c => wrapComment(c))
+        : [],
+      _raw: h
     };
   }
 
   // ===== wrapComment =====
-  function wrapComment(c, hole) {
+  function wrapComment(c) {
     if (!c) return null;
     return {
       id: c.cid,
@@ -147,15 +135,22 @@
       anonymous: c.anonymous === 1,
       images: parseMediaIds(c.media_ids),
       quote: Array.isArray(c.quote) ? c.quote.map(q => ({
-        id: q.cid,
-        content: q.text,
-        name_tag: q.name_tag
+        id: q.cid, content: q.text, name_tag: q.name_tag
       })) : [],
       _raw: c
     };
   }
 
-  // ===== parseMediaIds =====
+  function parseTags(tagsInfo, tagsIds) {
+    if (Array.isArray(tagsInfo) && tagsInfo.length > 0) {
+      return tagsInfo.map(t => t.name || t);
+    }
+    if (tagsIds && typeof tagsIds === 'string' && tagsIds !== '') {
+      return tagsIds.split(',').filter(Boolean);
+    }
+    return [];
+  }
+
   function parseMediaIds(ids) {
     if (!ids || ids === '') return [];
     const idList = typeof ids === 'string' ? ids.split(',') : Array.isArray(ids) ? ids : [];
@@ -166,7 +161,6 @@
     }));
   }
 
-  // ===== fmtTime =====
   function fmtTime(ts) {
     if (!ts) return '';
     const d = new Date(ts * 1000), now = new Date(), diff = now - d;
@@ -181,7 +175,7 @@
     getPosts, getPost, getComments, search,
     getTags, getNavigation, getUserConfig, getBookmarks,
     getUnreadMessages, getExclusiveIds, getBlockingWords, getReminders, getUserInfo,
-    version: '5.0.0'
+    version: '6.0.0'
   };
-  console.log('[Treehole Parser v5.0] Loaded - Fixed data mapping');
+  console.log('[Treehole Parser v6.0] Loaded - Correct dual format handling');
 })();
