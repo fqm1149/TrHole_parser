@@ -156,9 +156,69 @@
     const idList = typeof ids === 'string' ? ids.split(',') : Array.isArray(ids) ? ids : [];
     return idList.filter(Boolean).map(id => ({
       id: parseInt(id),
-      url: `/chapi/api/v3/media/getImageBinary?id=${id}`,
-      thumbnail: `/chapi/api/v3/media/getThumbnail?id=${id}`
+      // 这些 URL 需要带认证 headers 才能访问
+      // 前端应调用 TreeholeAPI.getImage(id) 获取 base64 或 blob URL
+      api: `/chapi/api/v3/media/getImageBinary?id=${id}`,
+      thumbnail_api: `/chapi/api/v3/media/getThumbnail?id=${id}`,
+      watermark_api: `/chapi/api/v3/media/getImageBinaryWatermark?id=${id}`
     }));
+  }
+
+  // ===== getImage: 获取图片数据 =====
+  async function getImage(mediaId, opts = {}) {
+    const { watermark = false, asBase64 = false } = opts;
+    const endpoint = watermark
+      ? `${BASE}/media/getImageBinaryWatermark`
+      : `${BASE}/media/getImageBinary`;
+    const resp = await fetch(`${endpoint}?id=${mediaId}`, {
+      credentials: 'include',
+      headers: getAuthHeaders()
+    });
+    if (!resp.ok) throw new Error(`Image fetch failed: ${resp.status}`);
+    const blob = await resp.blob();
+    if (asBase64) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+    return URL.createObjectURL(blob);
+  }
+
+  // ===== getThumbnail: 获取缩略图 =====
+  async function getThumbnail(mediaId, asBase64 = false) {
+    const resp = await fetch(`${BASE}/media/getThumbnail?id=${mediaId}`, {
+      credentials: 'include',
+      headers: getAuthHeaders()
+    });
+    if (!resp.ok) throw new Error(`Thumbnail fetch failed: ${resp.status}`);
+    const blob = await resp.blob();
+    if (asBase64) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+    return URL.createObjectURL(blob);
+  }
+
+  // ===== getImages: 批量获取帖子的所有图片 =====
+  async function getImages(mediaIds, opts = {}) {
+    const ids = typeof mediaIds === 'string'
+      ? mediaIds.split(',').filter(Boolean)
+      : Array.isArray(mediaIds) ? mediaIds : [];
+    const results = [];
+    for (const id of ids) {
+      try {
+        const url = await getImage(id, opts);
+        results.push({ id: parseInt(id), url, error: null });
+      } catch(e) {
+        results.push({ id: parseInt(id), url: null, error: e.message });
+      }
+    }
+    return results;
   }
 
   function fmtTime(ts) {
@@ -173,9 +233,10 @@
 
   window.TreeholeAPI = {
     getPosts, getPost, getComments, search,
+    getImage, getThumbnail, getImages,
     getTags, getNavigation, getUserConfig, getBookmarks,
     getUnreadMessages, getExclusiveIds, getBlockingWords, getReminders, getUserInfo,
-    version: '6.0.0'
+    version: '6.1.0'
   };
-  console.log('[Treehole Parser v6.0] Loaded - Correct dual format handling');
+  console.log('[Treehole Parser v6.1] Loaded - Image support added');
 })();
