@@ -55,6 +55,26 @@
     return { posts, total: data.total || 0, page, hasMore: posts.length === limit };
   }
 
+  // ===== getFollowed: 获取关注的帖子 =====
+  async function getFollowed(page = 1, limit = 10) {
+    const data = await request(`${BASE}/hole/list_comments`, {
+      page, limit, comment_limit: 0, is_follow: 1, comment_stream: 1
+    });
+    const items = data.list || [];
+    const posts = items.map(h => wrapHole(h));
+    return { posts, total: data.total || 0, page, hasMore: posts.length === limit };
+  }
+
+  // ===== getBounty: 获取悬赏帖子 =====
+  async function getBounty(page = 1, limit = 10) {
+    const data = await request(`${BASE}/hole/list_comments`, {
+      page, limit, comment_limit: 0, reward: 1, comment_stream: 1
+    });
+    const items = data.list || [];
+    const posts = items.map(h => wrapHole(h));
+    return { posts, total: data.total || 0, page, hasMore: posts.length === limit };
+  }
+
   // ===== getPost: hole/one 返回 {hole, list} =====
   async function getPost(pid) {
     const data = await request(`${BASE}/hole/one`, { pid, comment_stream: 1 });
@@ -63,15 +83,12 @@
     return post;
   }
 
-  // ===== getComments: 用 hole/one 获取评论 =====
+  // ===== getComments: 用 comment/list 获取评论 =====
   async function getComments(pid, page = 1, limit = 50) {
-    // hole/one 的 list 字段包含评论
-    const data = await request(`${BASE}/hole/one`, { pid, comment_stream: 1 });
-    const allComments = (data.list || []).map(c => wrapComment(c));
-    // 简单分页（API 一次返回所有评论）
-    const start = (page - 1) * limit;
-    const comments = allComments.slice(start, start + limit);
-    return { comments, total: allComments.length, hasMore: start + limit < allComments.length };
+    const data = await request(`${BASE}/comment/list`, { pid, page, limit });
+    // data = { list: [comment, ...], total }
+    const comments = (data.list || []).map(c => wrapComment(c));
+    return { comments, total: data.total || 0, hasMore: comments.length === limit };
   }
 
   // ===== search =====
@@ -232,11 +249,11 @@
   }
 
   window.TreeholeAPI = {
-    getPosts, getPost, getComments, search,
+    getPosts, getPost, getComments, search, getFollowed, getBounty,
     getImage, getThumbnail, getImages,
     getTags, getNavigation, getUserConfig, getBookmarks,
     getUnreadMessages, getExclusiveIds, getBlockingWords, getReminders, getUserInfo,
-    version: '6.1.0'
+    version: '7.0.0'
   };
-  console.log('[Treehole Parser v6.1] Loaded - Image support added');
+  console.log('[Treehole Parser v7.0] Loaded - Follow/Bookmark support');
 })();
