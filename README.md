@@ -1,6 +1,21 @@
-# 🌳 树洞数据解析器 v6.1
+# 🌳 树洞数据解析器 v7.1（稳定版）
 
-直接调用北大树洞后端 API，返回结构化 JSON 数据。
+直接调用北大树洞后端 API，返回结构化 JSON 数据的 Chrome 扩展。
+
+## ✅ 稳定功能
+
+| 功能 | API | 说明 |
+|------|-----|------|
+| 帖子列表 | `getPosts(page, limit)` | 最新帖子，分页 |
+| 关注帖子 | `getFollowed(page, limit)` | 已关注的帖子 |
+| 悬赏帖子 | `getBounty(page, limit)` | 悬赏帖子 |
+| 帖子详情 | `getPost(pid)` | 单个帖子 + 预览评论 |
+| 评论列表 | `getComments(pid, page, limit)` | 帖子评论，分页 |
+| 搜索 | `search(keyword, page, limit)` | 关键词搜索 |
+| 图片获取 | `getImage(id, opts)` | 原图/缩略图/base64 |
+| 标签树 | `getTags()` | 所有标签 |
+| 用户信息 | `getUserInfo()` | 当前用户 |
+| 未读消息 | `getUnreadMessages(type)` | 系统/站内消息 |
 
 ## 📦 安装
 
@@ -11,75 +26,59 @@
 
 ## 🚀 使用
 
-1. 登录树洞（确保浏览器有登录态）
-2. 打开 F12 Console
-3. 调用 API：
-
 ```javascript
-// 帖子
-const posts = await TreeholeAPI.getPosts(1, 10);
+// 登录树洞后，F12 Console 中调用
+const posts = await TreeholeAPI.getPosts(1, 20);
+const followed = await TreeholeAPI.getFollowed(1, 20);
 const post = await TreeholeAPI.getPost(8430775);
-const comments = await TreeholeAPI.getComments(8430775);
+const comments = await TreeholeAPI.getComments(8430775, 1, 50);
 const results = await TreeholeAPI.search("考试");
-
-// 图片
-const imgUrl = await TreeholeAPI.getImage(mediaId);
-const thumbUrl = await TreeholeAPI.getThumbnail(mediaId);
-const images = await TreeholeAPI.getImages(post.images);
-
-// 元数据
-const tags = await TreeholeAPI.getTags();
-const user = await TreeholeAPI.getUserInfo();
+const img = await TreeholeAPI.getImage(50007);
 ```
 
 ## 📖 API 文档
 
 详见 [API.md](API.md)
 
-## 🏗️ 架构
-
-```
-浏览器 (Cookie + Token 认证)
-    ↓
-parser.js (Chrome Extension)
-    ↓
-树洞后端 API (/chapi/api/v3/*)
-    ↓
-结构化 JSON 数据
-    ↓
-前端渲染 (Gemini 负责)
-```
-
-## 📁 文件结构
+## 📁 文件
 
 ```
 treehole-parser/
-├── manifest.json     # Chrome 扩展配置
-├── parser.js         # 核心解析逻辑
-├── popup.html        # 扩展弹窗
-├── icons/            # 扩展图标
-├── API.md            # API 使用文档
-└── README.md         # 本文件
+├── manifest.json
+├── parser.js         # 核心解析器
+├── popup.html
+├── icons/
+├── API.md
+└── README.md
 ```
 
 ## 📝 Changelog
 
+### v7.1（稳定版）
+- 删除 `getBookmarks()`（与 getFollowed 混淆）
+- 保留 `getFollowed()` / `getBounty()`
+
+### v7.0
+- 新增 `getFollowed()` / `getBounty()`
+
 ### v6.1
-- 新增 `getImage()` / `getThumbnail()` / `getImages()` 图片 API
-- 图片需认证访问，支持 blob URL 和 base64
+- 新增图片 API（getImage/getThumbnail/getImages）
 
 ### v6.0
-- 修复 `list_comments` 返回扁平 hole 格式
-- 修复 `getComments` 改用 `hole/one` 获取评论
+- 修复 API 响应字段映射（data.list）
 
 ### v5.0
-- 修复字段映射（hole.text → content 等）
+- 修复数据结构映射（hole.text → content）
 
 ### v4.0
-- 完整 API 覆盖（tags、navigation、bookmarks 等）
+- 完整 API 覆盖
 
 ### v3.0
-- 补全认证 headers（Authorization、XSRF、uuid）
+- 补全认证 headers
 
-### v1.0
-- 初始版本
+## 🔑 认证
+
+需要浏览器已登录树洞，扩展自动使用：
+- `Authorization: Bearer <token>`（localStorage）
+- `X-XSRF-TOKEN`（cookie）
+- `uuid`（自动生成）
